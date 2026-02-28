@@ -6,31 +6,31 @@ async function run() {
     console.log("Seeding creators...");
 
     const creators = [
-      {
-        name: "Front Door Network",
-        slug: "front-door-network",
-        creator_type: "network",
-        bio: "The AI Cinema Network — curated AI films and creators.",
-        location: "California",
-        website_url: "https://frontdoormedia.org",
-        tags: ["ai cinema", "network"],
-        verified: true,
-        featured: true,
-        published: true,
-      },
-      {
-        name: "AI Indie Director",
-        slug: "ai-indie-director",
-        creator_type: "filmmaker",
-        bio: "Independent filmmaker creating cinematic AI narratives.",
-        location: "Los Angeles",
-        website_url: null,
-        tags: ["ai film", "indie"],
-        verified: false,
-        featured: false,
-        published: true,
-      }
-    ];
+  {
+    name: "Front Door Network",
+    slug: "front-door-network",
+    creator_type: "collective",
+    bio: "The AI Cinema Network — curated AI films and creators.",
+    location: "California",
+    website_url: "https://frontdoormedia.org",
+    tags: ["ai cinema", "network"],
+    verified: true,
+    featured: true,
+    published: true,
+  },
+  {
+    name: "AI Indie Director",
+    slug: "ai-indie-director",
+    creator_type: "individual",
+    bio: "Independent filmmaker creating cinematic AI narratives.",
+    location: "Los Angeles",
+    website_url: null,
+    tags: ["ai film", "indie"],
+    verified: false,
+    featured: false,
+    published: true,
+  }
+];
 
     for (const c of creators) {
       await pool.query(
