@@ -1,0 +1,66 @@
+require("dotenv").config();
+const fs = require("fs");
+const path = require("path");
+const { Client } = require("pg");
+
+async function run() {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error("DATABASE_URL is not set");
+
+  const client = new Client({
+    connectionString: databaseUrl,
+    ssl: { rejectUnauthorized: false }, // Render Postgres needs SSL
+  });
+
+  const migrationsDir = path.join(__dirname, "../../migrations");
+  const files = fs
+    .readdirSync(migrationsDir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
+
+  console.log("Found migrations:", files);
+
+  await client.connect();
+
+  // track applied migrations
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      filename TEXT PRIMARY KEY,
+      applied_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  for (const file of files) {
+    const already = await client.query(
+      "SELECT 1 FROM schema_migrations WHERE filename = $1",
+      [file]
+    );
+    if (already.rowCount) {
+      console.log("Skipping:", file);
+      continue;
+    }
+
+    const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
+    console.log("Applying:", file);
+    await client.query("BEGIN");
+    try {
+      await client.query(sql);
+      await client.query(
+        "INSERT INTO schema_migrations (filename) VALUES ($1)",
+        [file]
+      );
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    }
+  }
+
+  await client.end();
+  console.log("Migrations complete.");
+}
+
+run().catch((e) => {
+  console.error("Migration failed:", e);
+  process.exit(1);
+});
