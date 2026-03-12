@@ -27,7 +27,11 @@
     "build:outreach": "node src/workers/build_outreach_queue.js",
     "consolidate:sources": "node src/workers/consolidate_creator_sources.js",
     "build:claimready": "node src/workers/build_claim_ready_list.js",
-    "find:duplicates": "node src/workers/find_duplicate_creators.js"
+    "find:duplicates": "node src/workers/find_duplicate_creators.js",
+    "crawler": "node src/workers/run_index_crawler.js",
+    "crawler:youtube": "node src/workers/run_index_crawler.js youtube",
+    "crawler:vimeo": "node src/workers/run_index_crawler.js vimeo",
+    "crawler:all": "node src/workers/run_index_crawler.js all"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
