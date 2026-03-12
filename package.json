@@ -23,7 +23,11 @@
     "reclassify:tiktok": "node src/workers/reclassify_tiktok_creators.js",
     "discover:x": "node src/workers/discover_x.js",
     "discover:reddit": "node src/workers/discover_reddit.js",
-    "discover:web": "node src/workers/discover_web.js"
+    "discover:web": "node src/workers/discover_web.js",
+    "build:outreach": "node src/workers/build_outreach_queue.js",
+    "consolidate:sources": "node src/workers/consolidate_creator_sources.js",
+    "build:claimready": "node src/workers/build_claim_ready_list.js",
+    "find:duplicates": "node src/workers/find_duplicate_creators.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

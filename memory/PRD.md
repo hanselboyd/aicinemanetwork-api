@@ -100,11 +100,46 @@ npm run reclassify:instagram# Instagram reclassification
 npm run reclassify:tiktok   # TikTok reclassification
 ```
 
+### Phase 8: Outreach Queue System (COMPLETE)
+- [x] Migration: 006_outreach_queue.sql
+- [x] Migration: 007_creator_consolidation_fields.sql
+- [x] Worker: build_outreach_queue.js - Queues high-confidence creators
+- [x] Worker: consolidate_creator_sources.js - Cross-platform consolidation
+- [x] Worker: build_claim_ready_list.js - Operational outreach report
+- [x] Worker: find_duplicate_creators.js - Duplicate detection
+
+## npm Scripts (Complete List)
+```bash
+# Discovery
+npm run discover:youtube
+npm run discover:vimeo
+npm run discover:instagram
+npm run discover:tiktok
+npm run discover:x
+npm run discover:reddit
+npm run discover:web
+
+# Maintenance
+npm run reclassify:youtube
+npm run reclassify:vimeo
+npm run reclassify:instagram
+npm run reclassify:tiktok
+npm run enrich:contacts
+npm run cleanup:contacts
+
+# Outreach & Operations
+npm run consolidate:sources
+npm run build:outreach
+npm run build:claimready
+npm run find:duplicates
+npm run claim:send
+```
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Steps)
 - [ ] Replace Vimeo stub with real Vimeo API integration
-- [ ] Set up PostgreSQL database for testing
+- [ ] Set up PostgreSQL database and run migrations
 - [ ] Test full discovery pipeline with real data
 
 ### P1 - High Priority
@@ -115,13 +150,13 @@ npm run reclassify:tiktok   # TikTok reclassification
 
 ### P2 - Medium Priority
 - [ ] Web search integration (Google/Bing API)
-- [ ] Outreach queue table and worker
-- [ ] Admin review layer (approved/rejected/watchlist)
+- [ ] Email outreach automation
+- [ ] Admin review UI
 
 ### P3 - Future Enhancements
-- [ ] Cross-platform creator merging
+- [ ] Project/film discovery layer
 - [ ] Festival calendar integration
-- [ ] Automated outreach emails
+- [ ] Discovery health reporting
 
 ## User Personas
 1. **AI Filmmaker** - Independent creator making AI-powered short films
