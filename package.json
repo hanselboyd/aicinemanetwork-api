@@ -33,7 +33,8 @@
     "crawler:vimeo": "node src/workers/run_index_crawler.js vimeo",
     "crawler:all": "node src/workers/run_index_crawler.js all",
     "discover:vimeo": "node src/workers/discover_vimeo.js",
-"reclassify:vimeo": "node src/workers/reclassify_vimeo_creators.js"
+"reclassify:vimeo": "node src/workers/reclassify_vimeo_creators.js",
+    "build:claim-ready": "node src/workers/build_claim_ready_list.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
