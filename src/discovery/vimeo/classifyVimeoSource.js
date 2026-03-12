@@ -5,10 +5,8 @@ const {
 } = require("./keywords");
 
 function countMatches(text, terms) {
-  const lower = (text || "").toLowerCase();
-  return terms.reduce((sum, term) => {
-    return sum + (lower.includes(term) ? 1 : 0);
-  }, 0);
+  const lower = String(text || "").toLowerCase();
+  return terms.reduce((sum, term) => sum + (lower.includes(term) ? 1 : 0), 0);
 }
 
 function classifyVimeoSource(source) {
@@ -25,45 +23,37 @@ function classifyVimeoSource(source) {
 
   let score = 0;
 
-  // Positive boosts
-  score += positiveMatches * 14;
-  score -= negativeMatches * 12;
+  score += positiveMatches * 12;
+  score -= negativeMatches * 10;
 
-  // Strong title signals - Vimeo is more portfolio-driven so stricter
-  if (title.toLowerCase().includes("ai short film")) score += 30;
-  if (title.toLowerCase().includes("short film")) score += 18;
-  if (title.toLowerCase().includes("music video")) score += 12;
-  if (title.toLowerCase().includes("ai")) score += 12;
+  if (title.toLowerCase().includes("ai short film")) score += 25;
+  if (title.toLowerCase().includes("short film")) score += 15;
+  if (title.toLowerCase().includes("music video")) score += 10;
+  if (title.toLowerCase().includes("ai")) score += 10;
 
-  // Description signals
-  if (/runway|pika|kling|midjourney|sora|veo/i.test(description)) score += 18;
-  if (/director|filmmaker|official|cinematic|narrative/i.test(description)) score += 10;
-  if (/portfolio|reel|showreel/i.test(description)) score += 8;
+  if (/runway|pika|kling|midjourney|sora|veo|elevenlabs|udio/i.test(description)) {
+    score += 15;
+  }
 
-  // Brand/tool penalty - reject official tool channels
+  if (/director|filmmaker|cinematic|narrative|synthetic film|experimental/i.test(description)) {
+    score += 10;
+  }
+
   if (brandCreatorMatches > 0) {
-    score -= 45;
+    score -= 40;
   }
 
   if (brandTitleMatches > 0 && brandCreatorMatches > 0) {
-    score -= 18;
-  }
-
-  if (
-    brandCreatorMatches > 0 &&
-    !/director|filmmaker|studio|collective|official/i.test(description)
-  ) {
-    score -= 12;
+    score -= 15;
   }
 
   let label = "false_positive";
 
-  // Vimeo thresholds are stricter than YouTube
-  if (score >= 70) {
+  if (score >= 65) {
     label = "ai_filmmaker";
-  } else if (score >= 50) {
+  } else if (score >= 45) {
     label = "mixed";
-  } else if (score >= 35) {
+  } else if (score >= 30) {
     label = "possible_ai_film";
   }
 
@@ -76,3 +66,4 @@ function classifyVimeoSource(source) {
 module.exports = {
   classifyVimeoSource
 };
+
