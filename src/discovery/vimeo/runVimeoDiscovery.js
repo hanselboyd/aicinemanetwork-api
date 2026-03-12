@@ -15,7 +15,7 @@ async function runVimeoDiscovery() {
   try {
     for (const query of VIMEO_DISCOVERY_QUERIES) {
       console.log(`[runVimeoDiscovery] Searching for: ${query}`);
-      const results = await searchVimeoVideos(query);
+      const results = await searchVimeoVideos(query, { perPage: 10 });
 
       for (const item of results) {
         total += 1;
