@@ -1,4 +1,5 @@
 const pool = require("../db/pool");
+const { buildClaimReadyList } = require("./build_claim_ready_list");
 
 function pickBestContact(contacts) {
   const priority = ["email", "website", "instagram", "x", "tiktok", "vimeo"];
@@ -10,39 +11,47 @@ function pickBestContact(contacts) {
   return sorted[0] || null;
 }
 
-function buildReason(creator, contact) {
+function isBadOutreachContact(contact) {
+  const value = String(contact?.contact_value || "").toLowerCase();
+
+  if (value.includes("runwayml.com")) return true;
+  if (value.includes("openai.com")) return true;
+  if (value.includes("midjourney.com")) return true;
+  if (value.includes("pika.art")) return true;
+  if (value.includes("kling")) return true;
+  if (value.includes("sora")) return true;
+  if (value.includes("canva.com")) return true;
+  if (value.includes("adobe.com")) return true;
+  if (value.includes("stability.ai")) return true;
+  if (value.includes("luma")) return true;
+  if (value.includes("enable-javascript.com")) return true;
+
+  return false;
+}
+
+function buildReason(row, contact) {
   return [
-    `classification=${creator.classification || "unknown"}`,
-    `score=${creator.discovery_confidence || 0}`,
+    `classification=${row.classification || "unknown"}`,
+    `score=${row.discovery_confidence || 0}`,
+    `readiness_score=${row.readiness_score || 0}`,
     `contact_type=${contact.contact_type}`
   ].join("; ");
 }
 
 async function buildOutreachQueue() {
-  const creatorsRes = await pool.query(
-    `
-    select
-      c.id,
-      c.name,
-      c.slug,
-      c.discovery_confidence,
-      c.classification,
-      c.auto_claim_ready
-    from creators c
-    where c.primary_platform is not null
-      and c.classification = 'ai_filmmaker'
-      and coalesce(c.discovery_confidence, 0) >= 70
-      and c.auto_claim_ready = true
-    order by c.discovery_confidence desc, c.last_discovered_at desc nulls last
-    `
-  );
+  const shortlist = await buildClaimReadyList();
 
   let reviewed = 0;
   let queued = 0;
   let skippedNoContact = 0;
   let skippedExisting = 0;
+  let skippedBadContact = 0;
 
-  for (const creator of creatorsRes.rows) {
+  for (const row of shortlist.rows) {
+    if (!row.priority_outreach) {
+      continue;
+    }
+
     reviewed += 1;
 
     const contactsRes = await pool.query(
@@ -52,12 +61,18 @@ async function buildOutreachQueue() {
       where creator_id = $1
         and contact_type in ('email', 'website', 'instagram', 'x', 'tiktok', 'vimeo')
       `,
-      [creator.id]
+      [row.creator_id]
     );
 
-    const contacts = contactsRes.rows || [];
+    const contacts = (contactsRes.rows || []).filter((contact) => !isBadOutreachContact(contact));
+
     if (!contacts.length) {
-      skippedNoContact += 1;
+      const allContacts = contactsRes.rows || [];
+      if (allContacts.length) {
+        skippedBadContact += 1;
+      } else {
+        skippedNoContact += 1;
+      }
       continue;
     }
 
@@ -76,7 +91,7 @@ async function buildOutreachQueue() {
         and contact_value = $3
       limit 1
       `,
-      [creator.id, bestContact.contact_type, bestContact.contact_value]
+      [row.creator_id, bestContact.contact_type, bestContact.contact_value]
     );
 
     if (existingRes.rows.length) {
@@ -98,10 +113,10 @@ async function buildOutreachQueue() {
       values ($1, $2, $3, 'pending', $4, now(), now())
       `,
       [
-        creator.id,
+        row.creator_id,
         bestContact.contact_type,
         bestContact.contact_value,
-        buildReason(creator, bestContact)
+        buildReason(row, bestContact)
       ]
     );
 
@@ -112,16 +127,23 @@ async function buildOutreachQueue() {
     reviewed,
     queued,
     skippedNoContact,
-    skippedExisting
+    skippedExisting,
+    skippedBadContact
   };
 }
 
-buildOutreachQueue()
-  .then((result) => {
-    console.log("Outreach queue build complete:", result);
-    process.exit(0);
-  })
-  .catch((error) => {
-    console.error("Outreach queue build failed:", error);
-    process.exit(1);
-  });
+if (require.main === module) {
+  buildOutreachQueue()
+    .then((result) => {
+      console.log("Outreach queue build complete:", result);
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error("Outreach queue build failed:", error);
+      process.exit(1);
+    });
+}
+
+module.exports = {
+  buildOutreachQueue
+};
