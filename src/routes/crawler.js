@@ -53,7 +53,9 @@ router.get("/stats", async (req, res) => {
  */
 router.post("/run", async (req, res) => {
   try {
-    const { source = "all", async: runAsync = false } = req.body;
+    // Default to async — prevents proxy/browser timeout for long-running crawls
+    // (Vimeo takes 5+ min, Reddit 2+ min). Sync mode still available via async:false.
+    const { source = "all", async: runAsync = true } = req.body;
 
     // Validate source
     if (source !== "all" && !Array.isArray(source)) {
