@@ -12,43 +12,83 @@ async function runInstagramDiscovery() {
   let total = 0;
   let accepted = 0;
   let creatorsCreated = 0;
+  let queriesCompleted = 0;
+  let rateLimitHit = false;
+  const seenUsernames = new Set();
+  const errors = [];
 
   try {
     for (const query of INSTAGRAM_DISCOVERY_QUERIES) {
-      console.log(`[runInstagramDiscovery] Searching for: ${query}`);
-      const results = await searchInstagramProfiles(query);
+      console.log(`[runInstagramDiscovery] Query: "${query}"`);
+
+      let results;
+      try {
+        results = await searchInstagramProfiles(query);
+      } catch (err) {
+        if (err.isRateLimit) {
+          console.warn(
+            `[runInstagramDiscovery] Rate limited at query "${query}". Stopping.`
+          );
+          rateLimitHit = true;
+          break;
+        }
+        console.error(
+          `[runInstagramDiscovery] Query "${query}" failed: ${err.message}`
+        );
+        errors.push(`${query}: ${err.message}`);
+        continue;
+      }
+
+      queriesCompleted++;
 
       for (const item of results) {
-        total += 1;
-        const result = await ingestInstagramResult(item, query);
-        if (result.accepted) {
-          accepted += 1;
-          if (result.creatorCreated) {
-            creatorsCreated += 1;
+        // Deduplicate across queries
+        const username = (item.username || "").toLowerCase();
+        if (seenUsernames.has(username)) continue;
+        seenUsernames.add(username);
+
+        total++;
+
+        try {
+          const result = await ingestInstagramResult(item, query);
+          if (result.accepted) {
+            accepted++;
+            if (result.creatorCreated) creatorsCreated++;
           }
+        } catch (err) {
+          console.error(
+            `[runInstagramDiscovery] Ingest error for @${username}: ${err.message}`
+          );
+          errors.push(`@${username}: ${err.message}`);
         }
       }
+
+      console.log(
+        `[runInstagramDiscovery] "${query}" → ${results.length} profiles, ${total} total (${accepted} accepted)`
+      );
     }
 
-    await finishCrawlRun(crawlRun.id, "completed", {
+    const status = rateLimitHit ? "completed" : "completed";
+    const stats = {
       total,
       accepted,
       creatorsCreated,
-      queriesRun: INSTAGRAM_DISCOVERY_QUERIES.length
-    });
-
-    return {
-      total,
-      accepted,
-      creatorsCreated,
-      queriesRun: INSTAGRAM_DISCOVERY_QUERIES.length
+      queriesRun: INSTAGRAM_DISCOVERY_QUERIES.length,
+      queriesCompleted,
+      profilesEnriched: seenUsernames.size,
+      rateLimitHit: rateLimitHit || undefined,
+      errors: errors.length > 0 ? errors.slice(0, 5) : undefined
     };
+
+    await finishCrawlRun(crawlRun.id, status, stats);
+    return stats;
   } catch (error) {
     await finishCrawlRun(crawlRun.id, "failed", {
       total,
       accepted,
       creatorsCreated,
       queriesRun: INSTAGRAM_DISCOVERY_QUERIES.length,
+      queriesCompleted,
       error: error.message
     });
 
