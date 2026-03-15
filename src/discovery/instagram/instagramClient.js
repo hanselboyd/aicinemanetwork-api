@@ -314,7 +314,9 @@ async function searchInstagramProfiles(query) {
         console.warn(
           `[instagramClient] Rate limited during enrichment. Stopping with ${profiles.length} profiles.`
         );
-        break;
+        // Return partial results with rate limit flag
+        profiles.rateLimitHit = true;
+        return profiles;
       }
       console.error(
         `[instagramClient] Error enriching @${username}: ${err.message}`
