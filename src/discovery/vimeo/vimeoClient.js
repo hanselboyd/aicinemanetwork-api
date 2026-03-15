@@ -1,5 +1,15 @@
 const VIMEO_API_BASE = "https://api.vimeo.com";
 
+// Throttle: minimum ms between consecutive Vimeo API calls
+const MIN_REQUEST_INTERVAL_MS = 1500;
+const MAX_RETRIES = 2;
+
+let lastRequestTime = 0;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function getAccessToken() {
   const token = process.env.VIMEO_ACCESS_TOKEN;
   if (!token) {
@@ -19,25 +29,73 @@ async function vimeoGet(path, params = {}) {
     }
   }
 
-  const response = await fetch(url.toString(), {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${token}`
-    }
-  });
-
-  const data = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const message =
-      data?.error ||
-      data?.error_description ||
-      `Vimeo API request failed with status ${response.status}`;
-    throw new Error(message);
+  // Throttle: ensure minimum gap between requests
+  const now = Date.now();
+  const elapsed = now - lastRequestTime;
+  if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+    await sleep(MIN_REQUEST_INTERVAL_MS - elapsed);
   }
 
-  return data;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const backoff = attempt * 5000; // 5s, 10s
+      console.warn(
+        `[vimeoClient] Retry ${attempt}/${MAX_RETRIES} for ${path} (waiting ${backoff}ms)`
+      );
+      await sleep(backoff);
+    }
+
+    lastRequestTime = Date.now();
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    // Handle rate limiting with retry
+    if (response.status === 429) {
+      const retryAfter = parseInt(
+        response.headers.get("retry-after") || "60",
+        10
+      );
+      console.warn(
+        `[vimeoClient] Rate limited on ${path}. Retry-After: ${retryAfter}s (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+      );
+      if (attempt < MAX_RETRIES) {
+        await sleep(retryAfter * 1000);
+        continue;
+      }
+      // Final attempt also rate-limited — throw a specific error
+      const err = new Error(
+        `Vimeo rate limit exceeded after ${MAX_RETRIES + 1} attempts on ${path}`
+      );
+      err.isRateLimit = true;
+      throw err;
+    }
+
+    // Log remaining quota when getting low
+    const remaining = response.headers.get("x-ratelimit-remaining");
+    if (remaining !== null && parseInt(remaining, 10) < 20) {
+      console.warn(
+        `[vimeoClient] Rate limit remaining: ${remaining} for ${path}`
+      );
+    }
+
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      const message =
+        data?.error ||
+        data?.error_description ||
+        `Vimeo API request failed with status ${response.status}`;
+      throw new Error(message);
+    }
+
+    return data;
+  }
 }
 
 function pickBestPicture(pictures) {
