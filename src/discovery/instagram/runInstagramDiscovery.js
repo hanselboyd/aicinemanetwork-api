@@ -41,6 +41,26 @@ async function runInstagramDiscovery() {
 
       queriesCompleted++;
 
+      // If DDG returned nothing, it might be rate limited
+      // (returns null which becomes [])
+      if (results.length === 0 && queriesCompleted > 1) {
+        // First empty query is normal; two consecutive empties = likely rate limited
+        const prevQuery = INSTAGRAM_DISCOVERY_QUERIES[
+          INSTAGRAM_DISCOVERY_QUERIES.indexOf(query) - 1
+        ];
+        // Track consecutive empties via a simple counter
+        if (!runInstagramDiscovery._emptyCount) runInstagramDiscovery._emptyCount = 0;
+        runInstagramDiscovery._emptyCount++;
+        if (runInstagramDiscovery._emptyCount >= 3) {
+          console.warn(
+            `[runInstagramDiscovery] ${runInstagramDiscovery._emptyCount} consecutive empty results. DDG may be rate limiting. Stopping.`
+          );
+          rateLimitHit = true;
+        }
+      } else {
+        runInstagramDiscovery._emptyCount = 0;
+      }
+
       // Check if client hit IG API rate limit during enrichment
       if (results.rateLimitHit) {
         console.warn(

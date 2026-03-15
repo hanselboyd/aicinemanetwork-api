@@ -1,10 +1,13 @@
-// Instagram client using DuckDuckGo search + Instagram mobile API
+// Instagram discovery via DuckDuckGo search + optional IG mobile API enrichment.
 //
-// Architecture:
-//   Phase 1: DuckDuckGo HTML search finds Instagram profile URLs
-//   Phase 2: Instagram's i.instagram.com mobile API returns full profile data
+// Two-tier architecture:
+//   Tier 1 (DDG, always works): DuckDuckGo search → parse snippets for
+//     username, full name, follower/following/post counts, truncated bio.
+//     Reliable from any IP. Enough data for classification.
 //
-// Both work reliably from cloud IPs (unlike Instagram's web endpoints).
+//   Tier 2 (IG API, optional): i.instagram.com mobile API → full bio,
+//     external URL, verification, category, profile pic.
+//     Rate-limited; skipped automatically if unavailable.
 
 const DDG_BASE = "https://html.duckduckgo.com/html/";
 const IG_API_BASE = "https://i.instagram.com/api/v1";
@@ -13,102 +16,125 @@ const DDG_UA =
 const IG_UA = "Instagram 275.0.0.27.98 Android";
 
 const MIN_DDG_INTERVAL_MS = 3000;
-const MIN_IG_INTERVAL_MS = 5000; // Conservative: IG mobile API is strict
+const MIN_IG_INTERVAL_MS = 5000;
 const MAX_RETRIES = 2;
 const REQUEST_TIMEOUT_MS = 15000;
-const MAX_PROFILES_PER_QUERY = 10; // Cap enrichment per query
+const MAX_PROFILES_PER_QUERY = 10;
 
 let lastDdgRequest = 0;
 let lastIgRequest = 0;
+let igApiAvailable = true; // Disabled on first 429
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ──────────────────────────────────────────────
-// DuckDuckGo search helpers
+// DuckDuckGo search + snippet parsing
 // ──────────────────────────────────────────────
 
 const SKIP_USERNAMES = new Set([
-  "p",
-  "reel",
-  "reels",
-  "explore",
-  "accounts",
-  "stories",
-  "about",
-  "legal",
-  "privacy",
-  "terms",
-  "developer",
-  "directory",
-  "direct",
-  "static",
-  "help",
-  "nametag",
-  "tv",
-  "web",
-  "api",
-  "graphql",
-  "tags"
+  "p", "reel", "reels", "explore", "accounts", "stories", "about",
+  "legal", "privacy", "terms", "developer", "directory", "direct",
+  "static", "help", "nametag", "tv", "web", "api", "graphql", "tags"
 ]);
 
 /**
- * Extract Instagram usernames from HTML page content
+ * Decode HTML entities
  */
-function extractUsernamesFromHtml(html) {
-  const matches = html.match(/instagram\.com\/([a-zA-Z0-9_.]+)\/?/g) || [];
-  const usernames = new Set();
-
-  for (const match of matches) {
-    const uMatch = match.match(/instagram\.com\/([a-zA-Z0-9_.]+)/);
-    if (!uMatch) continue;
-
-    const username = uMatch[1].toLowerCase();
-
-    if (SKIP_USERNAMES.has(username)) continue;
-    if (username.length < 3 || username.length > 30) continue;
-
-    usernames.add(username);
-  }
-
-  return [...usernames];
+function decodeEntities(text) {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&nbsp;/g, " ");
 }
 
 /**
- * Also extract bio snippets from DDG result descriptions.
- * DDG embeds truncated profile descriptions in search results.
+ * Parse a DDG search result snippet into a profile object.
+ *
+ * DDG format for Instagram profiles:
+ *   Title: "Full Name (@username) • Instagram photos and videos"
+ *   Snippet: "80K Followers, 0 Following, 72 Posts - Full Name (@username)
+ *            on Instagram: "bio text here...""
  */
-function extractSnippets(html) {
-  const snippets = {};
-  const resultBlocks = html.split('class="result__body"');
+function parseSnippetProfile(title, snippet, urlUsername) {
+  const clean = (s) => decodeEntities((s || "").replace(/<[^>]+>/g, "").trim());
+  title = clean(title);
+  snippet = clean(snippet);
 
-  for (let i = 1; i < resultBlocks.length; i++) {
-    const block = resultBlocks[i].split("</div>")[0] || "";
+  // Extract username from title: "Name (@username) • ..."
+  const titleUser = title.match(/@([a-zA-Z0-9_.]+)/);
+  const username = (titleUser ? titleUser[1] : urlUsername || "").toLowerCase();
+  if (!username || SKIP_USERNAMES.has(username) || username.length < 3) return null;
 
-    // Find the link URL
-    const urlMatch = block.match(/instagram\.com\/([a-zA-Z0-9_.]+)/);
-    if (!urlMatch) continue;
-
-    const username = urlMatch[1].toLowerCase();
-    if (SKIP_USERNAMES.has(username)) continue;
-
-    // Find the snippet text
-    const snippetMatch = block.match(
-      /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/
-    );
-    if (snippetMatch) {
-      const text = snippetMatch[1]
-        .replace(/<[^>]+>/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (text.length > 20) {
-        snippets[username] = text;
-      }
-    }
+  // Extract full name from title: everything before (@username)
+  let fullName = "";
+  if (titleUser) {
+    fullName = title.slice(0, title.indexOf("(@")).trim();
+  }
+  // Some titles have emoji-only names (like "🕉️"), keep them
+  if (!fullName && title.includes("•")) {
+    fullName = title.split("•")[0].replace(/@\S+/g, "").trim();
   }
 
-  return snippets;
+  // Parse stats from snippet: "80K Followers, 0 Following, 72 Posts"
+  let followerCount = 0;
+  let followingCount = 0;
+  let postCount = 0;
+
+  const followerMatch = snippet.match(/([\d,.]+[KkMm]?)\s*Followers?/i);
+  if (followerMatch) followerCount = parseShortNumber(followerMatch[1]);
+
+  const followingMatch = snippet.match(/([\d,.]+[KkMm]?)\s*Following/i);
+  if (followingMatch) followingCount = parseShortNumber(followingMatch[1]);
+
+  const postMatch = snippet.match(/([\d,.]+[KkMm]?)\s*Posts?/i);
+  if (postMatch) postCount = parseShortNumber(postMatch[1]);
+
+  // Extract bio from snippet: text after "on Instagram: "
+  let bio = "";
+  const bioMatch = snippet.match(/on Instagram:\s*"([^"]*)/);
+  if (bioMatch) {
+    bio = bioMatch[1].trim();
+  }
+
+  return {
+    username,
+    userId: null,
+    fullName: fullName || username,
+    bio,
+    externalUrl: null,
+    profilePicUrl: null,
+    profileUrl: `https://www.instagram.com/${username}/`,
+    followerCount,
+    followingCount,
+    postCount,
+    isVerified: false,
+    isBusinessAccount: false,
+    categoryName: null,
+    isPrivate: false,
+    enrichedVia: "ddg_snippet"
+  };
+}
+
+/**
+ * Parse short number formats: "80K" → 80000, "1.2M" → 1200000
+ */
+function parseShortNumber(str) {
+  if (!str) return 0;
+  const cleaned = str.replace(/,/g, "");
+  const match = cleaned.match(/([\d.]+)\s*([KkMm])?/);
+  if (!match) return 0;
+
+  let num = parseFloat(match[1]);
+  const suffix = (match[2] || "").toUpperCase();
+  if (suffix === "K") num *= 1000;
+  if (suffix === "M") num *= 1000000;
+  return Math.round(num);
 }
 
 async function ddgFetch(url) {
@@ -132,8 +158,10 @@ async function ddgFetch(url) {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
       });
 
-      if (response.status === 429) {
-        console.warn("[instagramClient] DDG rate limited");
+      if (response.status === 429 || response.status === 202) {
+        console.warn(
+          `[instagramClient] DDG rate limited (${response.status})`
+        );
         if (attempt < MAX_RETRIES) {
           await sleep(30000);
           continue;
@@ -142,25 +170,68 @@ async function ddgFetch(url) {
       }
 
       if (!response.ok) {
-        console.warn(
-          `[instagramClient] DDG returned ${response.status}`
-        );
+        console.warn(`[instagramClient] DDG returned ${response.status}`);
         return null;
       }
 
-      return await response.text();
+      // DDG sometimes returns 200 with bot-detection page
+      const text = await response.text();
+      if (text.includes("cc=botnet") || text.includes("blocked")) {
+        console.warn("[instagramClient] DDG bot detection triggered");
+        return null;
+      }
+
+      return text;
+
     } catch (err) {
       if (attempt < MAX_RETRIES) continue;
-      console.error(
-        `[instagramClient] DDG fetch error: ${err.message}`
-      );
+      console.error(`[instagramClient] DDG fetch error: ${err.message}`);
       return null;
     }
   }
 }
 
+/**
+ * Parse all Instagram profiles from a DDG search results page.
+ * Returns profile objects with data from snippets.
+ */
+function parseDdgResults(html) {
+  const profiles = [];
+  const seen = new Set();
+
+  // Split by result blocks
+  const blocks = html.split(/class="result\s/);
+
+  for (let i = 1; i < blocks.length; i++) {
+    const block = blocks[i];
+
+    // Extract URL-based username
+    const urlMatch = block.match(/instagram\.com\/([a-zA-Z0-9_.]+)/);
+    if (!urlMatch) continue;
+    const urlUsername = urlMatch[1].toLowerCase();
+    if (SKIP_USERNAMES.has(urlUsername)) continue;
+
+    // Extract title
+    const titleMatch = block.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/);
+    const title = titleMatch ? titleMatch[1] : "";
+
+    // Extract snippet
+    const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
+    const snippet = snippetMatch ? snippetMatch[1] : "";
+
+    const profile = parseSnippetProfile(title, snippet, urlUsername);
+    if (!profile) continue;
+    if (seen.has(profile.username)) continue;
+    seen.add(profile.username);
+
+    profiles.push(profile);
+  }
+
+  return profiles;
+}
+
 // ──────────────────────────────────────────────
-// Instagram mobile API helpers
+// Instagram mobile API (Tier 2 enrichment)
 // ──────────────────────────────────────────────
 
 async function igApiFetch(url) {
@@ -186,53 +257,32 @@ async function igApiFetch(url) {
 
       if (response.status === 429) {
         console.warn("[instagramClient] IG API rate limited (429)");
-        if (attempt < MAX_RETRIES) {
-          const backoff = (attempt + 1) * 120000; // 2min, 4min
-          console.warn(`[instagramClient] Backing off ${backoff / 1000}s`);
-          await sleep(backoff);
-          continue;
-        }
-        const err = new Error("Instagram API rate limit exceeded");
-        err.isRateLimit = true;
-        throw err;
+        igApiAvailable = false; // Disable for rest of this run
+        return null;
       }
 
-      if (response.status === 404) {
-        return null; // Profile not found
-      }
+      if (response.status === 404) return null;
 
       if (!response.ok) {
-        // Instagram sometimes returns HTML error pages
         const text = await response.text();
         if (text.includes("Page Not Found")) return null;
-        console.warn(
-          `[instagramClient] IG API returned ${response.status}`
-        );
+        console.warn(`[instagramClient] IG API returned ${response.status}`);
         return null;
       }
 
       const contentType = response.headers.get("content-type") || "";
-      if (!contentType.includes("json")) {
-        // Got HTML instead of JSON — profile may not exist
-        return null;
-      }
+      if (!contentType.includes("json")) return null;
 
       return await response.json();
     } catch (err) {
-      if (err.isRateLimit) throw err;
       if (attempt < MAX_RETRIES) continue;
-      console.error(
-        `[instagramClient] IG API error: ${err.message}`
-      );
+      console.error(`[instagramClient] IG API error: ${err.message}`);
       return null;
     }
   }
 }
 
-/**
- * Parse IG API response into a normalized profile object
- */
-function normalizeProfile(data) {
+function normalizeApiProfile(data) {
   const user = data?.data?.user;
   if (!user) return null;
 
@@ -250,8 +300,33 @@ function normalizeProfile(data) {
     isVerified: user.is_verified || false,
     isBusinessAccount: user.is_business_account || false,
     categoryName: user.category_name || null,
-    isPrivate: user.is_private || false
+    isPrivate: user.is_private || false,
+    enrichedVia: "ig_api"
   };
+}
+
+/**
+ * Try to enrich a DDG-discovered profile with full IG API data.
+ * Returns enriched profile if successful, or original profile.
+ */
+async function tryEnrichProfile(ddgProfile) {
+  if (!igApiAvailable) return ddgProfile;
+  if (!ddgProfile.username) return ddgProfile;
+
+  try {
+    const data = await igApiFetch(
+      `${IG_API_BASE}/users/web_profile_info/?username=${encodeURIComponent(ddgProfile.username)}`
+    );
+
+    if (!data) return ddgProfile;
+    const enriched = normalizeApiProfile(data);
+    if (!enriched) return ddgProfile;
+    if (enriched.isPrivate) return null; // Skip private
+
+    return enriched;
+  } catch {
+    return ddgProfile;
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -260,68 +335,45 @@ function normalizeProfile(data) {
 
 /**
  * Search for Instagram profiles matching a query.
- * Uses DuckDuckGo to find profile URLs, then enriches via IG mobile API.
+ *
+ * Tier 1: DuckDuckGo search → parse snippets (always works)
+ * Tier 2: IG mobile API enrichment (optional, skipped if rate limited)
  *
  * @param {string} query - Search term (e.g. "AI filmmaker")
- * @returns {Array} Normalized profile objects with full bio, stats
+ * @returns {Array} Profile objects
  */
 async function searchInstagramProfiles(query) {
-  // Phase 1: DuckDuckGo search to find Instagram usernames
+  // Tier 1: DuckDuckGo search
   const searchQuery = `${query} instagram`;
   const url = `${DDG_BASE}?q=${encodeURIComponent(searchQuery)}`;
 
   const html = await ddgFetch(url);
   if (!html) return [];
 
-  const usernames = extractUsernamesFromHtml(html);
-  if (usernames.length === 0) return [];
+  const ddgProfiles = parseDdgResults(html).slice(0, MAX_PROFILES_PER_QUERY);
+
+  if (ddgProfiles.length === 0) return [];
 
   console.log(
-    `[instagramClient] DDG found ${usernames.length} usernames for "${query}": ${usernames.slice(0, 8).join(", ")}`
+    `[instagramClient] DDG found ${ddgProfiles.length} profiles for "${query}": ${ddgProfiles.map((p) => "@" + p.username).join(", ")}`
   );
 
-  // Phase 2: Enrich each username via IG mobile API
+  // Tier 2: Optional IG API enrichment
   const profiles = [];
-  const toEnrich = usernames.slice(0, MAX_PROFILES_PER_QUERY);
+  let enrichCount = 0;
 
-  for (const username of toEnrich) {
-    try {
-      const data = await igApiFetch(
-        `${IG_API_BASE}/users/web_profile_info/?username=${encodeURIComponent(username)}`
-      );
+  for (const ddgProfile of ddgProfiles) {
+    const enriched = await tryEnrichProfile(ddgProfile);
+    if (!enriched) continue; // null = private account, skip
 
-      if (!data) {
-        console.log(
-          `[instagramClient] @${username} — not found or error`
-        );
-        continue;
-      }
+    if (enriched.enrichedVia === "ig_api") enrichCount++;
+    profiles.push(enriched);
+  }
 
-      const profile = normalizeProfile(data);
-      if (!profile) continue;
-
-      // Skip private accounts — can't verify their content
-      if (profile.isPrivate) {
-        console.log(
-          `[instagramClient] @${username} — private, skipping`
-        );
-        continue;
-      }
-
-      profiles.push(profile);
-    } catch (err) {
-      if (err.isRateLimit) {
-        console.warn(
-          `[instagramClient] Rate limited during enrichment. Stopping with ${profiles.length} profiles.`
-        );
-        // Return partial results with rate limit flag
-        profiles.rateLimitHit = true;
-        return profiles;
-      }
-      console.error(
-        `[instagramClient] Error enriching @${username}: ${err.message}`
-      );
-    }
+  if (enrichCount > 0) {
+    console.log(
+      `[instagramClient] Enriched ${enrichCount}/${profiles.length} profiles via IG API`
+    );
   }
 
   return profiles;
@@ -334,24 +386,33 @@ async function getInstagramProfile(username) {
   if (!username) return null;
 
   const cleaned = username.replace(/^@/, "").toLowerCase();
-  const data = await igApiFetch(
-    `${IG_API_BASE}/users/web_profile_info/?username=${encodeURIComponent(cleaned)}`
-  );
 
-  if (!data) return null;
-  return normalizeProfile(data);
+  // Try IG API first
+  if (igApiAvailable) {
+    const data = await igApiFetch(
+      `${IG_API_BASE}/users/web_profile_info/?username=${encodeURIComponent(cleaned)}`
+    );
+
+    if (data) {
+      const profile = normalizeApiProfile(data);
+      if (profile) return profile;
+    }
+  }
+
+  // Fallback: DDG search
+  const url = `${DDG_BASE}?q=${encodeURIComponent(`@${cleaned} site:instagram.com`)}`;
+  const html = await ddgFetch(url);
+  if (!html) return null;
+
+  const profiles = parseDdgResults(html);
+  return profiles.find((p) => p.username === cleaned) || null;
 }
 
 /**
- * Get recent posts for a username.
- * Note: The mobile API returns limited post data in the profile response.
- * Full post fetching would require authenticated requests.
- * Returns whatever is available in the profile edge data.
+ * Get recent posts for a username (requires IG API, not available via DDG)
  */
 async function getInstagramRecentPosts(username, limit = 10) {
-  // The profile endpoint includes edge_owner_to_timeline_media
-  // with recent posts. We extract what's available.
-  if (!username) return [];
+  if (!username || !igApiAvailable) return [];
 
   const cleaned = username.replace(/^@/, "").toLowerCase();
   const data = await igApiFetch(
@@ -360,9 +421,7 @@ async function getInstagramRecentPosts(username, limit = 10) {
 
   if (!data?.data?.user) return [];
 
-  const edges =
-    data.data.user.edge_owner_to_timeline_media?.edges || [];
-
+  const edges = data.data.user.edge_owner_to_timeline_media?.edges || [];
   return edges.slice(0, limit).map((edge) => {
     const node = edge.node || {};
     return {
@@ -370,8 +429,7 @@ async function getInstagramRecentPosts(username, limit = 10) {
       postUrl: node.shortcode
         ? `https://www.instagram.com/p/${node.shortcode}/`
         : null,
-      caption:
-        node.edge_media_to_caption?.edges?.[0]?.node?.text || "",
+      caption: node.edge_media_to_caption?.edges?.[0]?.node?.text || "",
       timestamp: node.taken_at_timestamp || null,
       likeCount: node.edge_liked_by?.count || 0,
       commentCount: node.edge_media_to_comment?.count || 0,
