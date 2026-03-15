@@ -41,6 +41,14 @@ async function runInstagramDiscovery() {
 
       queriesCompleted++;
 
+      // Check if client hit IG API rate limit during enrichment
+      if (results.rateLimitHit) {
+        console.warn(
+          `[runInstagramDiscovery] IG API rate limited at query "${query}". Processing partial results then stopping.`
+        );
+        rateLimitHit = true;
+      }
+
       for (const item of results) {
         // Deduplicate across queries
         const username = (item.username || "").toLowerCase();
@@ -66,6 +74,14 @@ async function runInstagramDiscovery() {
       console.log(
         `[runInstagramDiscovery] "${query}" → ${results.length} profiles, ${total} total (${accepted} accepted)`
       );
+
+      // Stop processing more queries if rate limited
+      if (rateLimitHit) {
+        console.warn(
+          `[runInstagramDiscovery] Stopping after ${queriesCompleted} queries due to IG rate limit.`
+        );
+        break;
+      }
     }
 
     const status = rateLimitHit ? "completed" : "completed";
