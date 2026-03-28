@@ -88,26 +88,49 @@ router.post("/api/admin/enrich-creators-geo", async (req, res) => {
     });
   }
 });
-router.get("/api/admin/enrich-creators-geo/debug", async (req, res) => {
+router.get("/api/admin/enrich-creators-geo/unmatched", async (req, res) => {
   try {
+    const limit = Number(req.query.limit || 50);
     const db = req.app.locals.db;
+
     if (!db) {
       return res.status(500).json({ ok: false, error: "Database not initialized" });
     }
 
-    const creatorsCount = await db.collection("creators").countDocuments();
-    const sample = await db.collection("creators").find({}).limit(3).toArray();
+    const docs = await db
+      .collection("creators")
+      .find({
+        $or: [
+          { countryCode: { $exists: false } },
+          { countryCode: null },
+          { countryCode: "" },
+        ],
+      })
+      .limit(limit)
+      .toArray();
+
+    const sample = docs.map((creator) => ({
+      id: creator._id,
+      name: creator.name || null,
+      slug: creator.slug || null,
+      bio: creator.bio || null,
+      description: creator.description || null,
+      locationCity: creator.locationCity || null,
+      country: creator.country || null,
+      location: creator.location || null,
+      headline: creator.headline || null,
+      summary: creator.summary || null,
+    }));
 
     return res.json({
       ok: true,
-      dbName: db.databaseName,
-      creatorsCount,
+      count: sample.length,
       sample,
     });
   } catch (error) {
     return res.status(500).json({
       ok: false,
-      error: error.message || "Debug failed",
+      error: error.message || "Failed to fetch unmatched creators",
     });
   }
 });
