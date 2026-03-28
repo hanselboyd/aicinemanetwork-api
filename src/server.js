@@ -3,7 +3,7 @@ const { MongoClient } = require("mongodb");
 const app = require("./app");
 
 const port = process.env.PORT || 8080;
-const mongoUri = process.env.MONGO_URI || process.env.DATABASE_URL;
+const mongoUri = process.env.MONGO_URI;
 const dbName = process.env.DB_NAME;
 
 if (!mongoUri) {
