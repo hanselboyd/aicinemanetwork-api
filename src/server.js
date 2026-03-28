@@ -5,7 +5,8 @@ const app = require("./app");
 const port = process.env.PORT || 8080;
 const mongoUri = process.env.MONGO_URI;
 const dbName = process.env.DB_NAME || "aicinema";
-
+console.log("MONGO_URI present:", !!process.env.MONGO_URI);
+console.log("DB_NAME present:", !!process.env.DB_NAME);
 if (!mongoUri) {
   throw new Error("Missing MONGO_URI in environment");
 }
