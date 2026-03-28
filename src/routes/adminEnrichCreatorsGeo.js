@@ -88,5 +88,27 @@ router.post("/api/admin/enrich-creators-geo", async (req, res) => {
     });
   }
 });
+router.get("/api/admin/enrich-creators-geo/debug", async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(500).json({ ok: false, error: "Database not initialized" });
+    }
 
+    const creatorsCount = await db.collection("creators").countDocuments();
+    const sample = await db.collection("creators").find({}).limit(3).toArray();
+
+    return res.json({
+      ok: true,
+      dbName: db.databaseName,
+      creatorsCount,
+      sample,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message || "Debug failed",
+    });
+  }
+});
 module.exports = router;
